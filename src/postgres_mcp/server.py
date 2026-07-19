@@ -554,6 +554,29 @@ async def get_top_queries(
         return format_error_response(str(e))
 
 
+def relax_transport_security_if_exposed(bind_host: str) -> None:
+    """Disable DNS-rebinding Host/Origin header checks when the server is bound
+    beyond localhost.
+
+    FastMCP auto-enables strict Host/Origin validation (only allowing
+    "localhost", "127.0.0.1", "::1") when constructed with its default
+    host. Once the operator explicitly binds to a non-localhost address
+    (e.g. "0.0.0.0" so the server is reachable from other containers/hosts,
+    such as behind a reverse proxy or from Open WebUI on a different host),
+    that check would otherwise reject every legitimate request because the
+    incoming Host header (e.g. a Docker service name) never matches the
+    allow-list. There's no fixed set of hostnames we could allow-list ahead
+    of time, so we disable the check in that case; the operator already
+    opted into external exposure by choosing the bind address.
+    """
+    if bind_host in ("127.0.0.1", "localhost", "::1"):
+        return
+
+    transport_security = mcp.settings.transport_security
+    if transport_security is not None:
+        transport_security.enable_dns_rebinding_protection = False
+
+
 async def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="PostgreSQL MCP Server")
@@ -662,10 +685,12 @@ async def main():
     elif args.transport == "sse":
         mcp.settings.host = args.sse_host
         mcp.settings.port = args.sse_port
+        relax_transport_security_if_exposed(args.sse_host)
         await mcp.run_sse_async()
     elif args.transport == "streamable-http":
         mcp.settings.host = args.streamable_http_host
         mcp.settings.port = args.streamable_http_port
+        relax_transport_security_if_exposed(args.streamable_http_host)
         await mcp.run_streamable_http_async()
 
 
